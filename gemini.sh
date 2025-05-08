@@ -1,4 +1,3 @@
-```bash
 #!/bin/bash
 
 # ===== 配置 =====
@@ -13,7 +12,6 @@ MAX_RETRY_ATTEMPTS=3  # 重试次数
 # 只保留纯密钥和逗号分隔密钥文件
 PURE_KEY_FILE="key.txt"
 COMMA_SEPARATED_KEY_FILE="comma_separated_keys_${EMAIL_USERNAME}.txt"
-AGGREGATED_KEY_FILE="aggregated_verbose_keys_${EMAIL_USERNAME}.txt" # 详细日志式文件，包含项目ID和密钥 (定义在此，但下载功能针对逗号分隔文件)
 SECONDS=0
 DELETION_LOG="project_deletion_$(date +%Y%m%d_%H%M%S).log"
 CLEANUP_LOG="api_keys_cleanup_$(date +%Y%m%d_%H%M%S).log" # 日志文件名移到配置区
@@ -191,80 +189,28 @@ check_quota() {
   return 0
 }
 
-# Function to attempt automatic download or provide instructions for the key file
-auto_download_keys_file() {
+# Function to automatically download the comma-separated key file
+auto_download_keys() {
   local file_to_download="$1"
-  local full_path_to_file
-
-  # Try to get the canonical, absolute path. -e ensures the file must exist.
-  if command -v realpath > /dev/null; then
-    if ! full_path_to_file=$(realpath -e "$file_to_download" 2>/dev/null); then
-      log "WARN" "File '$file_to_download' does not exist or 'realpath' could not resolve it. Skipping download attempt."
-      return 1
-    fi
-  else
-    log "WARN" "'realpath' command not found. Using basic path resolution."
-    if [[ "$file_to_download" == /* ]]; then # if already absolute
-        full_path_to_file="$file_to_download"
-    else # Relative path
-        # This assumes the file is in the current working directory or a subdirectory specified
-        local current_dir; current_dir=$(pwd)
-        full_path_to_file="$current_dir/$file_to_download"
-        # Normalize path slightly (remove trailing slash if file_to_download was empty, handle ./ )
-        full_path_to_file=$(echo "$full_path_to_file" | sed 's#/\./#/#g; s#//#/#g')
-
-    fi
-    # Basic check if realpath is not available
-    if [ ! -f "$full_path_to_file" ]; then
-        log "WARN" "File '$full_path_to_file' (resolved without realpath) not found. Skipping download attempt."
-        return 1
-    fi
-  fi
-
-  if [ ! -s "$full_path_to_file" ]; then # Check if file is empty
-    log "INFO" "File '$full_path_to_file' is empty. Skipping download."
+  if [ -z "$file_to_download" ] || [ ! -f "$file_to_download" ]; then
+    log "WARN" "auto_download_keys: 文件 '$file_to_download' 未找到或未指定。"
     return 1
   fi
 
-  log "INFO" "Providing download options for '$full_path_to_file'..."
-
-  # Check if running in Google Cloud Shell
-  if [ -n "$DEVSHELL_PROJECT_ID" ] || [ -n "$GOOGLE_CLOUD_SHELL" ] || [ -d "$HOME/cloudshell_open" ]; then
-    log "INFO" "Detected Google Cloud Shell environment."
-    if command -v cloudshell > /dev/null; then
-        log "INFO" "Attempting to initiate download using 'cloudshell download' command..."
-        if cloudshell download "$full_path_to_file"; then
-            log "SUCCESS" "Cloud Shell download initiated for '$file_to_download'. Check your browser's downloads."
-            return 0
-        else
-            log "WARN" "'cloudshell download' command failed. It might require user interaction or specific permissions."
-            log "INFO" "To download manually from Cloud Shell:"
-            echo "  1. Click the three-dot menu (More) in the Cloud Shell toolbar."
-            echo "  2. Select 'Download'."
-            echo "  3. Enter the file path: $full_path_to_file"
-            return 0 # Provided instructions
-        fi
+  if command -v sz >/dev/null 2>&1; then
+    log "INFO" "检测到 'sz' 命令，尝试自动下载 '$file_to_download'..."
+    echo "请准备接收文件 '$file_to_download' (ZMODEM)... (如果您的终端不支持，此步骤将卡住或失败)"
+    sleep 3 # Give a moment for the user to see the message and for terminal to prepare
+    if sz "$file_to_download"; then
+      log "SUCCESS" "文件 '$file_to_download' 已通过 sz 发送。"
+      echo "如果您的终端支持ZMODEM，文件应该已开始下载。如果没有反应，请按 Ctrl+C 数次，然后手动下载。"
     else
-        log "INFO" "'cloudshell' command-line tool not found. To download manually from Cloud Shell:"
-        echo "  1. Click the three-dot menu (More) in the Cloud Shell toolbar."
-        echo "  2. Select 'Download'."
-        echo "  3. Enter the file path: $full_path_to_file"
-        return 0 # Provided instructions
+      log "ERROR" "使用 'sz' 发送文件 '$file_to_download' 失败 (可能是终端不支持或sz命令问题)。"
+      log "INFO" "请手动从服务器下载文件: $PWD/$file_to_download"
     fi
   else
-    log "INFO" "Not running in Google Cloud Shell (or detection failed)."
-    log "INFO" "The file '$file_to_download' has been created at: $full_path_to_file"
-    log "INFO" "If this script is running on a remote server, you can download it using 'scp' from your local machine."
-    log "INFO" "Example scp command (run from your local machine, replace YOUR_USER@YOUR_SERVER_IP with your details):"
-    echo "  scp YOUR_USER@YOUR_SERVER_IP:\"$full_path_to_file\" ." # Quoted path for spaces
-    echo ""
-    log "INFO" "For convenience, here is the content of '$file_to_download':"
-    echo "-------------------- START OF $file_to_download --------------------"
-    cat "$full_path_to_file"
-    echo "" # Add a newline after cat output before the end marker
-    echo "--------------------- END OF $file_to_download ---------------------"
-    log "INFO" "You can copy the content above."
-    return 0
+    log "INFO" "未检测到 'sz' 命令。无法自动下载文件。"
+    log "INFO" "请手动从服务器下载文件: $PWD/$file_to_download"
   fi
 }
 
@@ -289,14 +235,12 @@ generate_report() {
   # 只报告两个纯密钥文件
   echo "- 纯API密钥 (每行一个): $PURE_KEY_FILE"
   echo "- 逗号分隔密钥 (单行): $COMMA_SEPARATED_KEY_FILE"
-  # If AGGREGATED_KEY_FILE were to be reported and populated:
-  # echo "- 详细日志式密钥文件: $AGGREGATED_KEY_FILE"
   echo "=========================="
 
-  # Attempt to auto-download the comma-separated key file
-  if [ "$success" -gt 0 ]; then # Ensure success is treated as a number for comparison
-    log "INFO" "" # Add a blank line for readability before download info
-    auto_download_keys_file "$COMMA_SEPARATED_KEY_FILE"
+  if [ $success -gt 0 ] && [ -s "$COMMA_SEPARATED_KEY_FILE" ]; then
+    auto_download_keys "$COMMA_SEPARATED_KEY_FILE"
+  elif [ $success -gt 0 ]; then
+    log "WARN" "有 $success 个成功密钥，但逗号分隔文件 '$COMMA_SEPARATED_KEY_FILE' 为空或未找到，跳过自动下载。"
   fi
 }
 
@@ -363,12 +307,12 @@ delete_project() {
   log "INFO" ">>> [$project_num/$total] 删除项目: $project_id"
   if gcloud projects delete "$project_id" --quiet 2>"$error_log"; then
     log "SUCCESS" "<<< [$project_num/$total] 成功删除项目: $project_id"
-    ( flock 201; echo "[$(date '+%Y-%m-%d %H:%M:%S')] [$project_num/$total] 已删除: $project_id" >> "$DELETION_LOG"; ) 201>"${TEMP_DIR}/${DELETION_LOG}.lock"
+    ( flock 201; echo "[$(date '+%Y-%m-%d %H:%M:%S')] [$project_num/$total] 已删除: $project_id" >> "$DELETION_LOG"; ) 201>"${TEMP_DIR}/${DELETION_LOG%.log}.lock"
     rm -f "$error_log"; return 0
   else
     local error_msg=$(cat "$error_log" 2>/dev/null); rm -f "$error_log"
     log "ERROR" "<<< [$project_num/$total] 删除项目失败: $project_id: ${error_msg:-'未知错误'}"
-    ( flock 201; echo "[$(date '+%Y-%m-%d %H:%M:%S')] [$project_num/$total] 删除失败: $project_id - ${error_msg:-'未知错误'}" >> "$DELETION_LOG"; ) 201>"${TEMP_DIR}/${DELETION_LOG}.lock"
+    ( flock 201; echo "[$(date '+%Y-%m-%d %H:%M:%S')] [$project_num/$total] 删除失败: $project_id - ${error_msg:-'未知错误'}" >> "$DELETION_LOG"; ) 201>"${TEMP_DIR}/${DELETION_LOG%.log}.lock"
     return 1
   fi
 }
@@ -436,12 +380,12 @@ extract_key_from_project() {
   fi
 }
 
-# 清理项目中的API密钥（新增功能）
+# 清理项目中的API密钥
 cleanup_api_keys() {
   local project_id="$1"
   local project_num="$2"
   local total="$3"
-  local error_log="${TEMP_DIR}/cleanup_${project_id}_error.log"; rm -f "$error_log"
+  local error_log="${TEMP_DIR}/cleanup_task_${project_id}_error.log"; rm -f "$error_log" # Renamed to avoid conflict with wrapper log
 
   log "INFO" ">>> [$project_num/$total] 清理项目API密钥: $project_id"
   local existing_keys_json; existing_keys_json=$(gcloud services api-keys list --project="$project_id" --format="json" 2>"$error_log")
@@ -473,6 +417,30 @@ cleanup_api_keys() {
   return 0
 }
 
+# Wrapper for cleanup_api_keys to handle detailed logging for run_parallel
+wrapper_cleanup_api_keys() {
+    local project_id="$1"
+    local project_num="$2"
+    local total_items="$3"
+    # CLEANUP_LOG and TEMP_DIR need to be available (exported)
+    local proj_log_file="${TEMP_DIR}/cleanup_wrapper_${project_id}.log" # Per-project log from wrapper
+    
+    # Execute the original function, capturing its output
+    cleanup_api_keys "$project_id" "$project_num" "$total_items" > "$proj_log_file" 2>&1
+    local func_ec=$?
+
+    # Append to the main log file with locking
+    (
+        flock 202 # Use a specific lock fd for the main cleanup log
+        echo -e "\n===== Log for project $project_id (TASK $project_num/$total_items, Exit Code: $func_ec) =====" >> "$CLEANUP_LOG"
+        cat "$proj_log_file" >> "$CLEANUP_LOG"
+        echo "===== End log for project $project_id =====" >> "$CLEANUP_LOG"
+        rm -f "$proj_log_file" # Clean up per-project temp log
+    ) 202>"${TEMP_DIR}/cleanup_main_log.lock"
+    
+    return $func_ec
+}
+
 # 资源清理函数
 cleanup_resources() {
   log "INFO" "执行退出清理..."
@@ -491,6 +459,7 @@ run_parallel() {
 
     if [ $total_items -eq 0 ]; then
         log "INFO" "没有项目需要 $description。"
+        echo "0 0" # success_count fail_count
         return 0
     fi
 
@@ -511,113 +480,48 @@ run_parallel() {
         pids+=($!)
         ((active_jobs++))
 
-        # 控制并行数
         if [[ "$active_jobs" -ge "$MAX_PARALLEL_JOBS" ]]; then
-            wait -n -p child_pid 2>/dev/null || true # Wait for any child to exit, get its PID
-            local exit_status=$? 
-            # If wait -n failed (e.g. no children left unexpectedly), don't assume success/failure yet
-            # More robustly, check specific PID from pids array, but this is simpler for now.
-            # The loop below will catch all PIDs anyway.
-            # For now, just decrement active_jobs on any 'wait -n' completion.
-            # The actual success/failure counting will be more accurate if done after all jobs.
-            # However, for live progress, we try to update.
-            if [[ " ${pids[@]} " =~ " $child_pid " ]]; then # Check if the exited PID was one we launched
-                ((completed_count++))
-                # The exit_status from 'wait -n -p' is for wait itself. Need to 'wait $child_pid' for actual status.
-                # This is complex for live updates. Simpler: assume 'wait -n' means one job finished.
-                # The final 'wait' loop is more accurate for final counts.
+            wait -n
+            local exit_status=$?
+            ((completed_count++))
+            if [ $exit_status -eq 0 ]; then
+                ((success_count++))
+            else
+                ((fail_count++))
             fi
-             ((active_jobs--))
-            show_progress $completed_count $total_items # This completed_count might be off here.
-                                                        # Let's rely on the final loop for accuracy.
-                                                        # For intermediate, it's more of a task dispatch progress.
-            echo -n " $description 任务已分派..." # Simplified intermediate message
+            ((active_jobs--))
+            show_progress $completed_count $total_items
+            echo -n " $description 中 (S:$success_count F:$fail_count T:$total_items)..."
         fi
         sleep 0.1
     done
 
     log "INFO" "" 
-    log "INFO" "所有 $total_items 个 '$description' 任务已启动, 等待剩余任务完成..."
-    
-    completed_count=0 # Reset for accurate final counting
-    for pid_to_wait in "${pids[@]}"; do
-        if wait "$pid_to_wait"; then
+    log "INFO" "所有 $total_items 个 '$description' 任务已启动, 等待剩余 $active_jobs 个任务完成..."
+    while [ $active_jobs -gt 0 ]; do
+        wait -n
+        local exit_status=$?
+        ((completed_count++))
+         if [ $exit_status -eq 0 ]; then
             ((success_count++))
         else
             ((fail_count++))
         fi
-        ((completed_count++))
+        ((active_jobs--))
         show_progress $completed_count $total_items
-        echo -n " 完成 $description (S:$success_count F:$fail_count)..."
+        echo -n " 完成 $description (S:$success_count F:$fail_count T:$total_items)..."
     done
+    wait 
 
     log "INFO" "" 
     log "INFO" "所有 '$description' 任务已执行完毕"
     log "INFO" "======================================================"
-
+    
+    echo "$success_count $fail_count" # Output counts for caller
     if [ $fail_count -gt 0 ]; then return 1; else return 0; fi
 }
 
-
-# 功能1：删除所有项目并重建 (COMMENTED OUT - NO LONGER IN MENU)
-# delete_and_rebuild() {
-#   SECONDS=0
-#   log "INFO" "======================================================"; log "INFO" "功能1: 删除所有项目并重建获取API密钥"; log "INFO" "======================================================"
-#   log "INFO" "正在获取项目列表..."; local list_error="${TEMP_DIR}/list_projects_error.log"; local ALL_PROJECTS=($(gcloud projects list --format="value(projectId)" --filter="projectId!~^sys-" --quiet 2>"$list_error")); local list_ec=$?; rm -f "$list_error"
-#   if [ $list_ec -ne 0 ]; then local error_msg=$(cat "$list_error" 2>/dev/null); log "ERROR" "无法获取项目列表: ${error_msg:-'gcloud命令失败'}"; return 1; fi
-
-#   if [ ${#ALL_PROJECTS[@]} -eq 0 ]; then
-#     log "INFO" "未找到任何用户项目，将直接开始创建新项目"
-#   else
-#     log "INFO" "找到 ${#ALL_PROJECTS[@]} 个用户项目需要删除"; echo "前5个项目示例："; for ((i=0; i<5 && i<${#ALL_PROJECTS[@]}; i++)); do printf " - %s\n" "${ALL_PROJECTS[i]}"; done; if [ ${#ALL_PROJECTS[@]} -gt 5 ]; then echo " - ... 以及其他 $((${#ALL_PROJECTS[@]} - 5)) 个项目"; fi
-#     read -p "!!! 危险操作 !!! 确认要删除所有 ${#ALL_PROJECTS[@]} 个项目吗？删除后将重新创建！(输入 'DELETE-ALL' 确认): " confirm; if [ "$confirm" != "DELETE-ALL" ]; then log "INFO" "删除操作已取消，返回主菜单"; return 1; fi
-#     echo "项目删除日志 ($(date +%Y-%m-%d_%H:%M:%S))" > "$DELETION_LOG"; echo "------------------------------------" >> "$DELETION_LOG"
-#     export -f delete_project log parse_json show_progress retry_with_backoff write_keys_to_files cleanup_api_keys run_parallel 
-#     export DELETION_LOG TEMP_DIR MAX_PARALLEL_JOBS MAX_RETRY_ATTEMPTS PURE_KEY_FILE COMMA_SEPARATED_KEY_FILE PROJECT_PREFIX EMAIL_USERNAME CLEANUP_LOG AGGREGATED_KEY_FILE
-
-#     run_parallel delete_project "${ALL_PROJECTS[@]}"
-#     # run_parallel now returns status, but specific counts are better from logs or file presence
-    
-#     local successful_deletions=$(grep -c "已删除:" "$DELETION_LOG")
-#     local failed_deletions=$(grep -c "删除失败:" "$DELETION_LOG")
-#     log "INFO" "删除结果统计："; log "INFO" " - 成功: $successful_deletions"; log "INFO" " - 失败: $failed_deletions"; log "INFO" "详细日志已保存到: $DELETION_LOG"; echo ""
-#     log "INFO" "等待系统处理完删除操作 (15秒)..."; sleep 15
-#   fi
-
-#   # --- 开始创建新项目 ---
-#   if ! check_quota; then return 1; fi
-#   if [ $TOTAL_PROJECTS -le 0 ]; then log "WARN" "调整后的计划创建项目数为 0 或无效，操作结束。"; return 0; fi
-
-#   log "INFO" "即将开始创建 $TOTAL_PROJECTS 个新项目..."; log "INFO" "将使用随机生成的用户名: ${EMAIL_USERNAME}"; log "INFO" "项目前缀: ${PROJECT_PREFIX}"; log "INFO" "脚本将在 5 秒后开始执行..."; sleep 5
-#   > "$PURE_KEY_FILE"; > "$COMMA_SEPARATED_KEY_FILE"
-#   echo "# Project_ID: API_Key (Generated: $(date +%Y-%m-%d_%H:%M:%S))" > "$AGGREGATED_KEY_FILE"
-#   echo "# Parallel execution, successful entries only. File: $AGGREGATED_KEY_FILE" >> "$AGGREGATED_KEY_FILE"
-#   echo "------------------------------------" >> "$AGGREGATED_KEY_FILE"
-
-#   export -f process_project retry_with_backoff log write_keys_to_files parse_json show_progress run_parallel
-#   export AGGREGATED_KEY_FILE PURE_KEY_FILE COMMA_SEPARATED_KEY_FILE TEMP_DIR MAX_RETRY_ATTEMPTS MAX_PARALLEL_JOBS
-
-#   local projects_to_create=()
-#   for i in $(seq 1 $TOTAL_PROJECTS); do
-#     project_num=$(printf "%03d" $i); local base_id="${PROJECT_PREFIX}-${EMAIL_USERNAME}-${project_num}"; project_id=$(echo "$base_id" | tr -cd 'a-z0-9-' | cut -c 1-30 | sed 's/-$//'); if ! [[ "$project_id" =~ ^[a-z] ]]; then project_id="g${project_id:1}"; project_id=$(echo "$project_id" | cut -c 1-30 | sed 's/-$//'); fi
-#     projects_to_create+=("$project_id")
-#   done
-
-#   run_parallel process_project "${projects_to_create[@]}"
-#   local create_status=$?
-
-#   local successful_keys=$(wc -l < "$PURE_KEY_FILE" | awk '{print $1}') # Get actual count
-#   local failed_entries=$((TOTAL_PROJECTS - successful_keys))
-#   if [ $failed_entries -lt 0 ]; then failed_entries=0; fi 
-
-#   generate_report "$successful_keys" "$failed_entries" "$TOTAL_PROJECTS"
-#   log "INFO" "======================================================"; log "INFO" "请检查文件 '$PURE_KEY_FILE' 和 '$COMMA_SEPARATED_KEY_FILE' 中的内容"
-#   if [ $failed_entries -gt 0 ]; then log "WARN" "有 $failed_entries 个项目处理失败，请检查控制台输出日志。"; log "WARN" "失败原因可能是触发了 GCP 配额限制、API 错误、权限问题或项目ID命名冲突。"; fi
-#   log "INFO" "提醒：项目需要关联有效的结算账号才能实际使用 API 密钥"; log "INFO" "======================================================"
-#   return $create_status 
-# }
-
-# 功能1 (原功能2)：新建项目并获取密钥
+# 功能1：新建项目并获取密钥 (原功能2)
 create_projects_and_get_keys() {
   SECONDS=0
   log "INFO" "======================================================"; log "INFO" "功能1: 新建项目并获取API密钥"; log "INFO" "======================================================"
@@ -625,12 +529,9 @@ create_projects_and_get_keys() {
   if [ $TOTAL_PROJECTS -le 0 ]; then log "WARN" "调整后的计划创建项目数为 0 或无效，操作结束。"; return 0; fi
   log "INFO" "将使用随机生成的用户名: ${EMAIL_USERNAME}"; log "INFO" "项目前缀: ${PROJECT_PREFIX}"; log "INFO" "即将开始创建 $TOTAL_PROJECTS 个新项目..."; log "INFO" "脚本将在 5 秒后开始执行..."; sleep 5
   > "$PURE_KEY_FILE"; > "$COMMA_SEPARATED_KEY_FILE"
-  echo "# Project_ID: API_Key (Generated: $(date +%Y-%m-%d_%H:%M:%S))" > "$AGGREGATED_KEY_FILE"
-  echo "# Parallel execution, successful entries only. File: $AGGREGATED_KEY_FILE" >> "$AGGREGATED_KEY_FILE"
-  echo "------------------------------------" >> "$AGGREGATED_KEY_FILE"
 
-  export -f process_project retry_with_backoff log write_keys_to_files parse_json show_progress run_parallel
-  export AGGREGATED_KEY_FILE PURE_KEY_FILE COMMA_SEPARATED_KEY_FILE TEMP_DIR MAX_RETRY_ATTEMPTS MAX_PARALLEL_JOBS
+  export -f _log_internal log process_project retry_with_backoff write_keys_to_files parse_json show_progress run_parallel
+  export PURE_KEY_FILE COMMA_SEPARATED_KEY_FILE TEMP_DIR MAX_RETRY_ATTEMPTS MAX_PARALLEL_JOBS
 
   local projects_to_create=()
   for i in $(seq 1 $TOTAL_PROJECTS); do
@@ -638,21 +539,26 @@ create_projects_and_get_keys() {
     projects_to_create+=("$project_id")
   done
 
-  run_parallel process_project "${projects_to_create[@]}"
-  local create_status=$?
+  local counts_output
+  local create_status
+  if counts_output=$(run_parallel process_project "${projects_to_create[@]}"); then
+    create_status=0
+  else
+    create_status=1
+  fi
+  local successful_keys fail_count
+  read -r successful_keys fail_count <<< "$counts_output"
+  # successful_keys from run_parallel is count of successful process_project calls.
+  # This should align with keys written if process_project only returns 0 on full success.
 
-  local successful_keys=$(wc -l < "$PURE_KEY_FILE" | awk '{print $1}')
-  local failed_entries=$((TOTAL_PROJECTS - successful_keys))
-  if [ $failed_entries -lt 0 ]; then failed_entries=0; fi
-
-  generate_report "$successful_keys" "$failed_entries" "$TOTAL_PROJECTS"
+  generate_report "$successful_keys" "$fail_count" "$TOTAL_PROJECTS"
   log "INFO" "======================================================"; log "INFO" "请检查文件 '$PURE_KEY_FILE' 和 '$COMMA_SEPARATED_KEY_FILE' 中的内容"
-   if [ $failed_entries -gt 0 ]; then log "WARN" "有 $failed_entries 个项目处理失败，请检查控制台输出日志。"; log "WARN" "失败原因可能是触发了 GCP 配额限制、API 错误、权限问题或项目ID命名冲突。"; fi
+   if [ "$fail_count" -gt 0 ]; then log "WARN" "有 $fail_count 个项目处理失败，请检查控制台输出日志。"; log "WARN" "失败原因可能是触发了 GCP 配额限制、API 错误、权限问题或项目ID命名冲突。"; fi
   log "INFO" "提醒：项目需要关联有效的结算账号才能实际使用 API 密钥"; log "INFO" "======================================================"
   return $create_status
 }
 
-# 功能2 (原功能3)：获取现有项目的API密钥
+# 功能2：获取现有项目的API密钥 (原功能3)
 get_keys_from_existing_projects() {
   SECONDS=0
   log "INFO" "======================================================"; log "INFO" "功能2: 获取现有项目的API密钥"; log "INFO" "======================================================"
@@ -663,28 +569,28 @@ get_keys_from_existing_projects() {
   log "INFO" "找到 $total_to_get 个用户项目"; echo "前5个项目示例："; for ((i=0; i<5 && i<${#ALL_PROJECTS[@]}; i++)); do printf " - %s\n" "${ALL_PROJECTS[i]}"; done; if [ ${#ALL_PROJECTS[@]} -gt 5 ]; then echo " - ... 以及其他 $((${#ALL_PROJECTS[@]} - 5)) 个项目"; fi
   read -p "确认要为这 $total_to_get 个项目获取或创建API密钥吗？[y/N]: " confirm; if [[ ! "$confirm" =~ ^[Yy]$ ]]; then log "INFO" "操作已取消，返回主菜单"; return 1; fi
   > "$PURE_KEY_FILE"; > "$COMMA_SEPARATED_KEY_FILE"
-  echo "# Project_ID: API_Key (Generated: $(date +%Y-%m-%d_%H:%M:%S))" > "$AGGREGATED_KEY_FILE"
-  echo "# Parallel execution, successful entries only. File: $AGGREGATED_KEY_FILE" >> "$AGGREGATED_KEY_FILE"
-  echo "------------------------------------" >> "$AGGREGATED_KEY_FILE"
 
-  export -f extract_key_from_project retry_with_backoff log write_keys_to_files parse_json show_progress run_parallel
-  export AGGREGATED_KEY_FILE PURE_KEY_FILE COMMA_SEPARATED_KEY_FILE TEMP_DIR MAX_RETRY_ATTEMPTS MAX_PARALLEL_JOBS
+  export -f _log_internal log extract_key_from_project retry_with_backoff write_keys_to_files parse_json show_progress run_parallel
+  export PURE_KEY_FILE COMMA_SEPARATED_KEY_FILE TEMP_DIR MAX_RETRY_ATTEMPTS MAX_PARALLEL_JOBS
 
-  run_parallel extract_key_from_project "${ALL_PROJECTS[@]}"
-  local get_status=$?
+  local counts_output
+  local get_status
+  if counts_output=$(run_parallel extract_key_from_project "${ALL_PROJECTS[@]}"); then
+    get_status=0
+  else
+    get_status=1
+  fi
+  local successful_keys fail_count
+  read -r successful_keys fail_count <<< "$counts_output"
 
-  local successful_keys=$(wc -l < "$PURE_KEY_FILE" | awk '{print $1}')
-  local failed_entries=$((total_to_get - successful_keys))
-   if [ $failed_entries -lt 0 ]; then failed_entries=0; fi
-
-  generate_report "$successful_keys" "$failed_entries" "$total_to_get"
+  generate_report "$successful_keys" "$fail_count" "$total_to_get"
   log "INFO" "======================================================"; log "INFO" "请检查文件 '$PURE_KEY_FILE' 和 '$COMMA_SEPARATED_KEY_FILE' 中的内容"
-   if [ $failed_entries -gt 0 ]; then log "WARN" "有 $failed_entries 个项目处理失败，请检查控制台输出日志。"; fi
+   if [ "$fail_count" -gt 0 ]; then log "WARN" "有 $fail_count 个项目处理失败，请检查控制台输出日志。"; fi
   log "INFO" "======================================================"
   return $get_status
 }
 
-# 功能3 (原功能4)：删除所有现有项目
+# 功能3：删除所有现有项目 (原功能4)
 delete_all_existing_projects() {
   SECONDS=0
   log "INFO" "======================================================"; log "INFO" "功能3: 删除所有现有项目"; log "INFO" "======================================================"
@@ -695,20 +601,26 @@ delete_all_existing_projects() {
   log "INFO" "找到 $total_to_delete 个用户项目需要删除"; echo "前5个项目示例："; for ((i=0; i<5 && i<${#ALL_PROJECTS[@]}; i++)); do printf " - %s\n" "${ALL_PROJECTS[i]}"; done; if [ ${#ALL_PROJECTS[@]} -gt 5 ]; then echo " - ... 以及其他 $((${#ALL_PROJECTS[@]} - 5)) 个项目"; fi
   read -p "!!! 危险操作 !!! 确认要删除所有 $total_to_delete 个项目吗？此操作不可撤销！(输入 'DELETE-ALL' 确认): " confirm; if [ "$confirm" != "DELETE-ALL" ]; then log "INFO" "删除操作已取消，返回主菜单"; return 1; fi
   echo "项目删除日志 ($(date +%Y-%m-%d_%H:%M:%S))" > "$DELETION_LOG"; echo "------------------------------------" >> "$DELETION_LOG"
-  export -f delete_project log parse_json show_progress retry_with_backoff write_keys_to_files cleanup_api_keys run_parallel
-  export DELETION_LOG TEMP_DIR MAX_PARALLEL_JOBS MAX_RETRY_ATTEMPTS PURE_KEY_FILE COMMA_SEPARATED_KEY_FILE PROJECT_PREFIX EMAIL_USERNAME CLEANUP_LOG AGGREGATED_KEY_FILE
+  
+  export -f _log_internal log delete_project parse_json show_progress retry_with_backoff run_parallel
+  export DELETION_LOG TEMP_DIR MAX_PARALLEL_JOBS MAX_RETRY_ATTEMPTS
 
-  run_parallel delete_project "${ALL_PROJECTS[@]}"
-  local delete_status=$?
-
-  local successful_deletions=$(grep -c "已删除:" "$DELETION_LOG")
-  local failed_deletions=$(grep -c "删除失败:" "$DELETION_LOG")
+  local counts_output
+  local delete_status
+  if counts_output=$(run_parallel delete_project "${ALL_PROJECTS[@]}"); then
+    delete_status=0
+  else
+    delete_status=1
+  fi
+  local successful_deletions failed_deletions
+  read -r successful_deletions failed_deletions <<< "$counts_output"
+  
   local duration=$SECONDS; local minutes=$((duration / 60)); local seconds_rem=$((duration % 60))
   echo ""; echo "========== 删除报告 =========="; echo "总计尝试删除: $total_to_delete 个项目"; echo "成功删除: $successful_deletions 个项目"; echo "删除失败: $failed_deletions 个项目"; echo "总执行时间: $minutes 分 $seconds_rem 秒"; echo "详细日志已保存至: $DELETION_LOG"; echo "=========================="
   return $delete_status
 }
 
-# 功能4 (原功能5)：清理项目API密钥（不删除项目）
+# 功能4：清理项目API密钥（不删除项目）(原功能5)
 cleanup_project_api_keys() {
   SECONDS=0
   log "INFO" "======================================================"; log "INFO" "功能4: 清理项目API密钥（不删除项目）"; log "INFO" "======================================================"
@@ -720,75 +632,54 @@ cleanup_project_api_keys() {
   read -p "确认要删除这 $total_to_cleanup 个项目中的所有API密钥吗？[y/N]: " confirm; if [[ ! "$confirm" =~ ^[Yy]$ ]]; then log "INFO" "操作已取消，返回主菜单"; return 1; fi
   echo "API密钥清理日志 ($(date +%Y-%m-%d_%H:%M:%S))" > "$CLEANUP_LOG"; echo "------------------------------------" >> "$CLEANUP_LOG"; log "INFO" "详细清理日志将记录在: $CLEANUP_LOG"
   
-  # Export necessary functions and variables for cleanup_api_keys when run by run_parallel
-  export -f cleanup_api_keys log parse_json show_progress retry_with_backoff
+  export -f _log_internal log wrapper_cleanup_api_keys cleanup_api_keys parse_json show_progress retry_with_backoff run_parallel
   export TEMP_DIR MAX_PARALLEL_JOBS CLEANUP_LOG MAX_RETRY_ATTEMPTS
 
-  # Use run_parallel for cleanup_api_keys
-  run_parallel cleanup_api_keys "${ALL_PROJECTS[@]}"
-  local cleanup_status=$? # Get the overall status from run_parallel
-
-  # The run_parallel function now provides success/fail counts based on the exit status of cleanup_api_keys
-  # For more detailed "keys deleted" count, one would need to parse CLEANUP_LOG or have cleanup_api_keys return more info.
-  # For now, we report based on successful execution of the cleanup_api_keys function per project.
-  
-  # We can't easily get sub-counts (like keys deleted) from run_parallel directly
-  # So, the report will be about how many projects had their cleanup_api_keys function run successfully.
-  local projects_cleanup_attempted=$total_to_cleanup
-  # Estimating success/failure based on run_parallel's return. This is a simplification.
-  # A more robust way would be to parse CLEANUP_LOG.
-  # For now, the success_count/fail_count from run_parallel (if it were to return them) would be for the 'cleanup_api_keys' function itself.
-  log "INFO" "清理函数执行完毕。详细日志已保存至: $CLEANUP_LOG"
-  
-  local duration=$SECONDS; local minutes=$((duration / 60)); local seconds_rem=$((duration % 60))
-  echo ""; echo "========== API密钥清理报告 =========="
-  echo "总计处理项目数: $total_to_cleanup"
-  # Note: The following success/failure count refers to the successful *execution* of the
-  # cleanup_api_keys function for each project, not necessarily the number of keys deleted.
-  # This part needs run_parallel to return counts or parse logs.
-  # For now, we'll just use the overall status.
-  if [ $cleanup_status -eq 0 ]; then
-    echo "所有项目的API密钥清理尝试均已执行 (具体删除情况请查看日志)."
+  local counts_output
+  local cleanup_status
+  if counts_output=$(run_parallel wrapper_cleanup_api_keys "${ALL_PROJECTS[@]}"); then
+    cleanup_status=0
   else
-    echo "部分项目的API密钥清理尝试可能遇到问题 (具体情况请查看日志)."
+    cleanup_status=1
   fi
-  echo "总执行时间: $minutes 分 $seconds_rem 秒"
-  echo "详细清理日志已保存至: $CLEANUP_LOG"
-  echo "(注意：报告反映的是清理函数对各项目的执行情况。请检查日志了解实际删除的密钥数量。)"
-  echo "=========================="
+  local cleanup_success_count cleanup_fail_count
+  read -r cleanup_success_count cleanup_fail_count <<< "$counts_output"
+
+  log "INFO" ""; log "INFO" "所有任务已执行完毕"; log "INFO" "======================================================"
+  local duration=$SECONDS; local minutes=$((duration / 60)); local seconds_rem=$((duration % 60))
+  echo ""; echo "========== API密钥清理报告 =========="; echo "总计处理: $total_to_cleanup 个项目"; echo "清理函数成功执行: $cleanup_success_count 个"; echo "清理函数执行失败: $cleanup_fail_count 个"; echo "总执行时间: $minutes 分 $seconds_rem 秒"; echo "详细清理日志已保存至: $CLEANUP_LOG"; echo "(注意：成功执行不代表一定删除了密钥，可能项目原本就没有密钥。失败则表示清理函数本身报错。)"; echo "=========================="
   return $cleanup_status
 }
-
 
 # 显示主菜单
 show_menu() {
   clear
   echo "======================================================"
-  echo "     GCP Gemini API 密钥懒人管理工具 v2.8 " # Version bump for menu changes
+  echo "     GCP Gemini API 密钥懒人管理工具 v2.7 " 
   echo "======================================================"
   local current_account; current_account=$(gcloud auth list --filter=status:ACTIVE --format="value(account)" 2>/dev/null | head -n 1); if [ -z "$current_account" ]; then current_account="无法获取 (gcloud auth list 失败?)"; fi
   local current_project; current_project=$(gcloud config get-value project 2>/dev/null); if [ -z "$current_project" ]; then current_project="未设置 (gcloud config get-value project 失败?)"; fi
   echo "当前账号: $current_account"; echo "当前项目: $current_project"; echo "并行任务数: $MAX_PARALLEL_JOBS"; echo "重试次数: $MAX_RETRY_ATTEMPTS"
   echo "JSON解析: 仅使用备用方法 (sed/grep)"
   echo ""; echo "请选择功能:"; 
-  echo "1. 一键新建项目并获取API密钥" # Was 2
-  echo "2. 一键获取现有项目的API密钥" # Was 3
-  echo "3. 一键删除所有现有项目 (删除项目后 要等30天以上 才算彻底删除了)" # Was 4, with added text
-  echo "4. 清理项目API密钥（不删除项目）" # Was 5
-  echo "5. 修改配置参数" # Was 6
+  echo "1. 一键新建项目并获取API密钥"
+  echo "2. 一键获取现有项目的API密钥"
+  echo "3. 一键删除所有现有项目 (删除项目后 要等30天以上 才算彻底删除了)"
+  echo "4. 清理项目API密钥（不删除项目）"
+  echo "5. 修改配置参数"
   echo "0. 退出"; echo "======================================================"
-  read -p "请输入选项 [0-5]: " choice # Adjusted range
+  read -p "请输入选项 [0-5]: " choice
 
   case $choice in
-    1) create_projects_and_get_keys ;;    # Was 2
-    2) get_keys_from_existing_projects ;; # Was 3
-    3) delete_all_existing_projects ;;    # Was 4
-    4) cleanup_project_api_keys ;;       # Was 5
-    5) configure_settings ;;             # Was 6
+    1) create_projects_and_get_keys ;; 
+    2) get_keys_from_existing_projects ;; 
+    3) delete_all_existing_projects ;; 
+    4) cleanup_project_api_keys ;; 
+    5) configure_settings ;;
     0) log "INFO" "正在退出..."; exit 0 ;; 
     *) echo "无效选项 '$choice'，请重新选择。"; sleep 2 ;;
   esac
-  if [[ "$choice" =~ ^[1-5]$ ]]; then echo ""; read -p "按回车键返回主菜单..."; fi # Adjusted range
+  if [[ "$choice" =~ ^[1-5]$ ]]; then echo ""; read -p "按回车键返回主菜单..."; fi
 }
 
 # 配置设置
@@ -796,12 +687,7 @@ configure_settings() {
   local setting_changed=false
   while true; do
       clear; echo "======================================================"; echo "配置参数"; echo "======================================================"
-      echo "当前设置:"; 
-      echo "1. 项目前缀 (用于新建项目): $PROJECT_PREFIX"
-      echo "2. 计划创建的项目数量 (用于功能1): $TOTAL_PROJECTS" # Adjusted "功能1和2" to "功能1"
-      echo "3. 最大并行任务数: $MAX_PARALLEL_JOBS"
-      echo "4. 最大重试次数 (用于API调用): $MAX_RETRY_ATTEMPTS"
-      echo "0. 返回主菜单"; echo "======================================================"
+      echo "当前设置:"; echo "1. 项目前缀 (用于新建项目): $PROJECT_PREFIX"; echo "2. 计划创建的项目数量 (用于功能1): $TOTAL_PROJECTS"; echo "3. 最大并行任务数: $MAX_PARALLEL_JOBS"; echo "4. 最大重试次数 (用于API调用): $MAX_RETRY_ATTEMPTS"; echo "0. 返回主菜单"; echo "======================================================"
       read -p "请选择要修改的设置 [0-4]: " setting_choice
       case $setting_choice in
         1) read -p "请输入新的项目前缀 (留空取消): " new_prefix; if [ -n "$new_prefix" ]; then if [[ "$new_prefix" =~ ^[a-z][a-z0-9-]{0,19}$ ]]; then PROJECT_PREFIX="$new_prefix"; log "INFO" "项目前缀已更新为: $PROJECT_PREFIX"; setting_changed=true; else echo "错误：前缀必须以小写字母开头，只能包含小写字母、数字和连字符，长度1-20。"; sleep 2; fi; fi ;;
@@ -824,5 +710,3 @@ log "INFO" "检查 GCP 项目配置..."; if ! gcloud config get-value project >/
 # --- 主菜单循环 ---
 while true; do show_menu; done
 # exit 0
-
-```
