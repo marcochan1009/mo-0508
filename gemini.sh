@@ -538,7 +538,7 @@ run_parallel() {
 
     log "INFO" "" 
     log "INFO" "所有 $total_items 个 '$description' 任务已启动, 等待剩余任务完成..."
-  
+    
     completed_count=0 # Reset for accurate final counting
     for pid_to_wait in "${pids[@]}"; do
         if wait "$pid_to_wait"; then
@@ -577,7 +577,7 @@ run_parallel() {
 
 #     run_parallel delete_project "${ALL_PROJECTS[@]}"
 #     # run_parallel now returns status, but specific counts are better from logs or file presence
-  
+    
 #     local successful_deletions=$(grep -c "已删除:" "$DELETION_LOG")
 #     local failed_deletions=$(grep -c "删除失败:" "$DELETION_LOG")
 #     log "INFO" "删除结果统计："; log "INFO" " - 成功: $successful_deletions"; log "INFO" " - 失败: $failed_deletions"; log "INFO" "详细日志已保存到: $DELETION_LOG"; echo ""
@@ -719,7 +719,7 @@ cleanup_project_api_keys() {
   log "INFO" "找到 $total_to_cleanup 个用户项目"; echo "前5个项目示例："; for ((i=0; i<5 && i<${#ALL_PROJECTS[@]}; i++)); do printf " - %s\n" "${ALL_PROJECTS[i]}"; done; if [ ${#ALL_PROJECTS[@]} -gt 5 ]; then echo " - ... 以及其他 $((${#ALL_PROJECTS[@]} - 5)) 个项目"; fi
   read -p "确认要删除这 $total_to_cleanup 个项目中的所有API密钥吗？[y/N]: " confirm; if [[ ! "$confirm" =~ ^[Yy]$ ]]; then log "INFO" "操作已取消，返回主菜单"; return 1; fi
   echo "API密钥清理日志 ($(date +%Y-%m-%d_%H:%M:%S))" > "$CLEANUP_LOG"; echo "------------------------------------" >> "$CLEANUP_LOG"; log "INFO" "详细清理日志将记录在: $CLEANUP_LOG"
-
+  
   # Export necessary functions and variables for cleanup_api_keys when run by run_parallel
   export -f cleanup_api_keys log parse_json show_progress retry_with_backoff
   export TEMP_DIR MAX_PARALLEL_JOBS CLEANUP_LOG MAX_RETRY_ATTEMPTS
@@ -731,7 +731,7 @@ cleanup_project_api_keys() {
   # The run_parallel function now provides success/fail counts based on the exit status of cleanup_api_keys
   # For more detailed "keys deleted" count, one would need to parse CLEANUP_LOG or have cleanup_api_keys return more info.
   # For now, we report based on successful execution of the cleanup_api_keys function per project.
-
+  
   # We can't easily get sub-counts (like keys deleted) from run_parallel directly
   # So, the report will be about how many projects had their cleanup_api_keys function run successfully.
   local projects_cleanup_attempted=$total_to_cleanup
@@ -739,7 +739,7 @@ cleanup_project_api_keys() {
   # A more robust way would be to parse CLEANUP_LOG.
   # For now, the success_count/fail_count from run_parallel (if it were to return them) would be for the 'cleanup_api_keys' function itself.
   log "INFO" "清理函数执行完毕。详细日志已保存至: $CLEANUP_LOG"
-
+  
   local duration=$SECONDS; local minutes=$((duration / 60)); local seconds_rem=$((duration % 60))
   echo ""; echo "========== API密钥清理报告 =========="
   echo "总计处理项目数: $total_to_cleanup"
