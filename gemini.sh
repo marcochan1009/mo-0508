@@ -1,13 +1,3 @@
-Okay, I've made the requested changes:
-
-1.  Removed menu option "1. 一键删除所有现有项目并重建获取API密钥".
-2.  Adjusted the subsequent menu option numbers.
-3.  Added the clarifying text "(删除项目后 要等30天以上 才算彻底删除了)" after the "一键删除所有现有项目" option.
-4.  Commented out the `delete_and_rebuild` function as it's no longer accessible from the menu.
-5.  Updated the script version number.
-
-Here is the modified script:
-
 ```bash
 #!/bin/bash
 
